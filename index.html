@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Integer Overflow Explorer</title>
+<style>
+  :root { --bg:#f7f8fa; --card:#fff; --ink:#1d2330; --muted:#6b7385; --line:#dfe3ea;
+          --one:#2563eb; --zero:#e8ecf3; --sign:#f59e0b; --bad:#dc2626; --good:#16a34a; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui, sans-serif; background:var(--bg); color:var(--ink); line-height:1.45; }
+  main { max-width: 860px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { margin: 0 0 4px; font-size: 1.6rem; }
+  .sub { color: var(--muted); margin: 0 0 20px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px; margin-bottom:16px; }
+  .controls { display:grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap:12px; }
+  label { display:block; font-size:.8rem; color:var(--muted); margin-bottom:4px; }
+  input[type=text], select { width:100%; padding:8px; border:1px solid var(--line); border-radius:8px; font:inherit; background:#fff; }
+  input[type=range] { width:100%; }
+  .row { display:flex; flex-wrap:wrap; gap:8px; margin-top:12px; }
+  button { padding:7px 12px; border:1px solid var(--line); background:#fff; border-radius:8px; cursor:pointer; font:inherit; }
+  button:hover { background:#eef2ff; }
+  .bits-label { font-size:.85rem; margin:12px 0 4px; font-weight:600; }
+  .bits { display:flex; flex-wrap:wrap; gap:3px; }
+  .bit { width:22px; height:28px; display:flex; align-items:center; justify-content:center; border-radius:4px;
+         font-family: ui-monospace, monospace; font-size:.85rem; background:var(--zero); color:#555; }
+  .bit.one { background:var(--one); color:#fff; }
+  .bit.sign { outline:2px solid var(--sign); }
+  .gap { margin-right:8px; }
+  .result { display:grid; grid-template-columns: 1fr 1fr; gap:12px; }
+  .stat { padding:12px; border-radius:8px; background:var(--bg); }
+  .stat b { display:block; font-size:1.3rem; font-family: ui-monospace, monospace; word-break: break-all; }
+  .flag { padding:10px 12px; border-radius:8px; margin-top:12px; font-weight:600; }
+  .flag.bad { background:#fee2e2; color:var(--bad); }
+  .flag.good { background:#dcfce7; color:var(--good); }
+  .explain { margin-top:10px; color:var(--ink); }
+  .legend { font-size:.8rem; color:var(--muted); margin-top:8px; }
+  .track { position:relative; height:28px; background:var(--zero); border-radius:6px; margin-top:8px; }
+  .marker { position:absolute; top:-4px; width:4px; height:36px; border-radius:2px; }
+  .range-labels { display:flex; justify-content:space-between; font-size:.75rem; color:var(--muted); font-family: ui-monospace, monospace; }
+  @media (max-width:520px) { .result { grid-template-columns: 1fr; } .bit { width:16px; height:24px; font-size:.7rem; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>Integer Overflow Explorer</h1>
+  <p class="sub">Pick a bit width, signed or unsigned, and an operation. See the true math answer next to what the computer actually stores.</p>
+
+  <div class="card">
+    <div class="controls">
+      <div><label for="bits">Bit width</label>
+        <select id="bits"><option value="8">8-bit</option><option value="16">16-bit</option><option value="32">32-bit</option></select></div>
+      <div><label for="signed">Type</label>
+        <select id="signed"><option value="true">Signed (two's complement)</option><option value="false">Unsigned</option></select></div>
+      <div><label for="op">Operation</label>
+        <select id="op"><option value="+">A + B</option><option value="-">A − B</option><option value="*">A × B</option></select></div>
+    </div>
+    <div class="controls" style="margin-top:12px">
+      <div><label for="a">A</label><input type="text" id="a" value="127"></div>
+      <div><label for="b">B</label><input type="text" id="b" value="1"></div>
+    </div>
+    <div style="margin-top:12px"><label for="slider">Slide A across its whole range</label><input type="range" id="slider"></div>
+    <div class="row">
+      <button data-p="i8">int8: 127 + 1</button>
+      <button data-p="u8">uint8: 255 + 1</button>
+      <button data-p="u8m">uint8: 0 − 1</button>
+      <button data-p="alloc">uint32 allocation: count × 16</button>
+      <button id="step">A + 1 (step)</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="bits-label">A</div><div class="bits" id="bitsA"></div>
+    <div class="bits-label">B</div><div class="bits" id="bitsB"></div>
+    <div class="bits-label">Stored result (after wrapping)</div><div class="bits" id="bitsR"></div>
+    <div class="legend">Blue = 1, grey = 0. In signed mode the orange outline marks the sign bit.</div>
+  </div>
+
+  <div class="card">
+    <div class="result">
+      <div class="stat">True math result<b id="trueV"></b></div>
+      <div class="stat">What the computer stores<b id="wrapV"></b></div>
+    </div>
+    <div id="flag" class="flag"></div>
+    <div id="explain" class="explain"></div>
+    <div class="track" id="track"></div>
+    <div class="range-labels"><span id="minL"></span><span id="maxL"></span></div>
+    <div class="legend">Position of A (blue), B (grey), and the stored result (green) inside the type's range. Red = true result if it would land outside the range.</div>
+  </div>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const state = { bits: 8, signed: true };
+
+function range() {
+  const n = BigInt(state.bits);
+  return state.signed ? [-(1n << (n - 1n)), (1n << (n - 1n)) - 1n] : [0n, (1n << n) - 1n];
+}
+function wrap(v) {
+  const m = 1n << BigInt(state.bits);
+  let r = ((v % m) + m) % m;
+  if (state.signed && r >= m / 2n) r -= m;
+  return r;
+}
+function parse(s) {
+  s = s.trim();
+  if (!/^-?\d+$/.test(s)) return null;
+  return BigInt(s);
+}
+function bitString(v) {
+  const m = 1n << BigInt(state.bits);
+  return (((v % m) + m) % m).toString(2).padStart(state.bits, "0");
+}
+function drawBits(el, v) {
+  const s = bitString(v);
+  el.innerHTML = "";
+  [...s].forEach((c, i) => {
+    const d = document.createElement("div");
+    d.className = "bit" + (c === "1" ? " one" : "") + (state.signed && i === 0 ? " sign" : "") + (i % 8 === 7 && i !== s.length - 1 ? " gap" : "");
+    d.textContent = c;
+    el.appendChild(d);
+  });
+}
+function pct(v) {
+  const [lo, hi] = range();
+  const p = Number((v - lo) * 10000n / (hi - lo)) / 100;
+  return Math.max(0, Math.min(100, p));
+}
+function marker(v, color) {
+  return `<div class="marker" style="left:calc(${pct(v)}% - 2px);background:${color}"></div>`;
+}
+
+function update() {
+  state.bits = +$("bits").value;
+  state.signed = $("signed").value === "true";
+  const [lo, hi] = range();
+  $("minL").textContent = lo.toString();
+  $("maxL").textContent = hi.toString();
+
+  let a = parse($("a").value), b = parse($("b").value);
+  if (a === null || b === null) {
+    $("flag").className = "flag bad";
+    $("flag").textContent = "Enter whole numbers for A and B.";
+    return;
+  }
+  const notes = [];
+  if (a < lo || a > hi) { a = wrap(a); notes.push(`A was outside the range, so it was wrapped to ${a}.`); }
+  if (b < lo || b > hi) { b = wrap(b); notes.push(`B was outside the range, so it was wrapped to ${b}.`); }
+
+  const op = $("op").value;
+  const t = op === "+" ? a + b : op === "-" ? a - b : a * b;
+  const w = wrap(t);
+  const over = t !== w;
+
+  $("trueV").textContent = t.toString();
+  $("wrapV").textContent = w.toString();
+  drawBits($("bitsA"), a); drawBits($("bitsB"), b); drawBits($("bitsR"), w);
+
+  const f = $("flag");
+  f.className = "flag " + (over ? "bad" : "good");
+  f.textContent = over ? "OVERFLOW: the true result does not fit, so it wrapped." : "No overflow: the result fits.";
+
+  let msg = "";
+  if (over) {
+    const m = 1n << BigInt(state.bits);
+    msg = `The type holds ${lo} to ${hi}. The hardware keeps only the low ${state.bits} bits, which is the same as taking the true result modulo ${m}: ${t} → ${w}.`;
+    if (state.signed && t > hi) msg += " Going past the max flips the sign bit, so a big positive turns negative.";
+    if (state.signed && t < lo) msg += " Going below the min wraps around to a large positive.";
+    if (!state.signed && t < 0n) msg += " Unsigned values can't be negative, so subtracting below 0 wraps to the top of the range.";
+  } else {
+    msg = "Try the sliders or presets to push the answer past the edge of the range.";
+  }
+  $("explain").textContent = [...notes, msg].join(" ");
+
+  let mk = marker(a, "#2563eb") + marker(b, "#9aa3b5") + marker(w, "#16a34a");
+  if (over) mk += marker(t < lo ? lo : hi, "#dc2626");
+  $("track").innerHTML = mk;
+}
+
+function syncSlider() {
+  const [lo, hi] = range();
+  const s = $("slider");
+  // Use Numbers for the slider; fine for 8/16-bit, and 32-bit within safe integer range.
+  s.min = Number(lo); s.max = Number(hi); s.step = 1;
+  const a = parse($("a").value);
+  if (a !== null) s.value = Number(a);
+}
+
+["bits", "signed", "op"].forEach(id => $(id).addEventListener("change", () => { syncSlider(); update(); }));
+["a", "b"].forEach(id => $(id).addEventListener("input", () => { syncSlider(); update(); }));
+$("slider").addEventListener("input", e => { $("a").value = e.target.value; update(); });
+$("step").addEventListener("click", () => {
+  const a = parse($("a").value); if (a === null) return;
+  $("a").value = wrap(a + 1n).toString();
+  $("op").value = "+"; $("b").value = "0";
+  syncSlider(); update();
+});
+
+const presets = {
+  i8:    { bits: 8,  signed: "true",  op: "+", a: "127", b: "1" },
+  u8:    { bits: 8,  signed: "false", op: "+", a: "255", b: "1" },
+  u8m:   { bits: 8,  signed: "false", op: "-", a: "0",   b: "1" },
+  alloc: { bits: 32, signed: "false", op: "*", a: "268435457", b: "16" }
+};
+document.querySelectorAll("[data-p]").forEach(btn => btn.addEventListener("click", () => {
+  const p = presets[btn.dataset.p];
+  $("bits").value = p.bits; $("signed").value = p.signed; $("op").value = p.op;
+  $("a").value = p.a; $("b").value = p.b;
+  syncSlider(); update();
+  if (btn.dataset.p === "alloc") {
+    $("explain").textContent += " Real-world angle: if code computes malloc(count * 16) with a 32-bit count, a huge count wraps to a tiny allocation (here 16 bytes), and a later loop over 'count' items writes far past the buffer.";
+  }
+}));
+
+syncSlider(); update();
+</script>
+</body>
+</html>
